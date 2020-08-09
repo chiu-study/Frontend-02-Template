@@ -1,4 +1,5 @@
 const net = require('net');
+const parser = require('./parser.js');
 
 class Request {
     constructor(options) {
@@ -42,6 +43,7 @@ class Request {
             connection.on('data', (data) => {
                 const parser = new ResponseParser()
                 parser.receive(data.toString())
+
                 if (parser.isFinished) {
                     resolve(parser.response)
                     connection.end()
@@ -79,10 +81,24 @@ class ResponseParser {
         this.headers = {}
         this.headerName = ''
         this.headerValue = ''
-        this.bodyParser = null
+        this.bodyParse = null
     }
+
+    get isFinished() {
+        return this.bodyParse && this.bodyParse.isFinished
+    }
+
+    get response() {
+        this.statusLine.match(/HTTP\/1.1 ([0-9]+) ([\s\S+])/)
+        return {
+            statusCode: RegExp.$1,
+            statusText: RegExp.$2,
+            headers: this.headers,
+            body: this.bodyParse.content.join('')
+        }
+    }
+
     receive(string) {
-        console.log('s2222tring', string)
         for (let i = 0; i < string.length; i++) {
             this.receiveChar(string.charAt(i))
         }
@@ -91,32 +107,33 @@ class ResponseParser {
     receiveChar(char) {
         if (this.current === this.WAITING_STATUS_LINE) {
             if (char === '\r') {
-              this.current = this.WAITING_STATUS_LINE_END
+                this.current = this.WAITING_STATUS_LINE_END
             } else {
-              this.statusLine += char
+                this.statusLine += char
             }
-          } else if (this.current === this.WAITING_STATUS_LINE_END) {
+        } else if (this.current === this.WAITING_STATUS_LINE_END) {
             if (char === '\n') {
-              this.current = this.WAITING_HEADER_NAME
+                this.current = this.WAITING_HEADER_NAME
             }
-          } else if (this.current === this.WAITING_HEADER_NAME) {
+        } else if (this.current === this.WAITING_HEADER_NAME) {
             if (char === ':') {
-              this.current = this.WAITING_HEADER_SPACE
+                this.current = this.WAITING_HEADER_SPACE
             } else if (char === '\r') {
-              this.current = this.WAITING_HEADER_BLOCK_END
-              if (this.headers['Transfer-Encoding'] === 'chunked')
-                this.bodyParse = new TrunkedBodyParser()
+                this.current = this.WAITING_HEADER_BLOCK_END
+                if (this.headers['Transfer-Encoding'] === 'chunked') {
+                    this.bodyParse = new TrunkedBodyParser()
+                }
             } else {
-              this.headerName += char
+                this.headerName += char
             }
-          } else if (this.current === this.WAITING_HEADER_SPACE) {
+        } else if (this.current === this.WAITING_HEADER_SPACE) {
             if (char === ' ') {
-              this.current = this.WAITING_HEADER_VALUE
+                this.current = this.WAITING_HEADER_VALUE
             }
-          } else if (this.current === this.WAITING_HEADER_VALUE) {
+        } else if (this.current === this.WAITING_HEADER_VALUE) {
             if (char === '\r') {
                 this.current = this.WAITING_HEADER_LINE_END
-                this.header[this.headerName] = this.headerValue
+                this.headers[this.headerName] = this.headerValue
                 this.headerName = ''
                 this.headerValue = ''
             } else {
@@ -128,10 +145,59 @@ class ResponseParser {
             }
         } else if (this.current === this.WAITING_HEADER_BLOCK_END) {
             if (char === '\n') {
-                this, current = this.WAITING_BODY
+                this.current = this.WAITING_BODY
             }
         } else if (this.current === this.WAITING_BODY) {
-            console.log(char)
+            this.bodyParse.receiveChar(char)
+        }
+    }
+}
+
+// 第五步 BOdyParser总结
+// Response的body可能根据Conteng-Type有不同的结构，因此我们会采用子Parser的结构来解决问题
+// 以TrunkedBodyParser为例，同样用状态机来处理body的格式
+class TrunkedBodyParser {
+    constructor() {
+        this.WAITING_LENGTH = 0
+        this.WAITING_LENGTH_LINE_END = 1
+        this.READING_TRUNk = 2
+        this.WAITING_NEW_LINE = 3
+        this.WAITING_NEW_LINE_END = 4
+        this.length = 0
+        this.content = []
+        this.isFinished = false
+        this.current = this.WAITING_LENGTH
+    }
+
+    receiveChar(char) {
+        if (this.current === this.WAITING_LENGTH) {
+            if (char === '\r') {
+                if (this.length === 0) {
+                    this.isFinished = true
+                }
+                this.current = this.WAITING_LENGTH_LINE_END
+            } else {
+                this.length *= 16
+                this.length += parseInt(char, 16)
+            }
+        } else if (this.current === this.WAITING_LENGTH_LINE_END) {
+            if (char === '\n') {
+                this.current = this.READING_TRUNk
+            }
+        } else if (this.current === this.READING_TRUNk) {
+            this.content.push(char)
+            this.length--
+            if (this.length === 0) {
+                this.current = this.WAITING_NEW_LINE
+            }
+        } else if (this.current === this.WAITING_NEW_LINE) {
+            if (char === '\r') {
+                this.current = this.WAITING_NEW_LINE_END
+            }
+        } else if (this.current === this.WAITING_NEW_LINE_END) {
+            if (char === '\n') {
+                this.current = this.WAITING_LENGTH
+            }
         }
     }
 }
@@ -149,8 +215,9 @@ void async function () {
             name: 'rachel'
         }
     })
-
     let response = await request.send()
+
+    let dom = parser.parseHTML(response.body)
 
     console.log(response)
 }()

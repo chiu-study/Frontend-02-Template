@@ -8,7 +8,7 @@ const server = http.createServer((req, res) => {
   req.on('error', err => {
     console.error(err)
   }).on('data', chunk => {
-    body.push(chunk.toString())
+    body.push(chunk)  // Buffer.concat()的参数是List of Buffer or Uint8Array
   }).on('end', () => {
     body = Buffer.concat(body).toString()
     console.log('body', body)
